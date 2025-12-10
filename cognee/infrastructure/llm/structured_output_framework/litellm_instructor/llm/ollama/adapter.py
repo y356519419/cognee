@@ -2,7 +2,7 @@ import base64
 import litellm
 import logging
 import instructor
-from typing import Type
+from typing import Type, Any
 from openai import OpenAI
 from pydantic import BaseModel
 
@@ -51,8 +51,12 @@ class OllamaAPIAdapter(LLMInterface):
         self.endpoint = endpoint
         self.max_completion_tokens = max_completion_tokens
 
+        # Create a regular OpenAI client for non-structured responses
+        self.openai_client = OpenAI(base_url=self.endpoint, api_key=self.api_key)
+        
+        # Create an instructor-wrapped client for structured responses
         self.aclient = instructor.from_openai(
-            OpenAI(base_url=self.endpoint, api_key=self.api_key), mode=instructor.Mode.JSON
+            self.openai_client, mode=instructor.Mode.JSON
         )
 
     @retry(
@@ -63,8 +67,8 @@ class OllamaAPIAdapter(LLMInterface):
         reraise=True,
     )
     async def acreate_structured_output(
-        self, text_input: str, system_prompt: str, response_model: Type[BaseModel]
-    ) -> BaseModel:
+        self, text_input: str, system_prompt: str, response_model: Type
+    ) -> Any:
         """
         Generate a structured output from the LLM using the provided text and system prompt.
 
@@ -85,23 +89,39 @@ class OllamaAPIAdapter(LLMInterface):
             - BaseModel: A structured output that conforms to the specified response model.
         """
 
-        response = self.aclient.chat.completions.create(
-            model=self.model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"{text_input}",
-                },
-                {
-                    "role": "system",
-                    "content": system_prompt,
-                },
-            ],
-            max_retries=5,
-            response_model=response_model,
-        )
-
-        return response
+        if response_model is str:
+            # For string responses, use regular OpenAI client without instructor
+            response = self.openai_client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": system_prompt,
+                    },
+                    {
+                        "role": "user",
+                        "content": f"{text_input}",
+                    },
+                ],
+            )
+            return response.choices[0].message.content
+        else:
+            # For structured outputs, use instructor-wrapped client
+            response = self.aclient.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": system_prompt,
+                    },
+                    {
+                        "role": "user",
+                        "content": f"{text_input}",
+                    },
+                ],
+                response_model=response_model,
+            )
+            return response
 
     @retry(
         stop=stop_after_delay(128),

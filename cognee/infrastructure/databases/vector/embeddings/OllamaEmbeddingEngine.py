@@ -124,10 +124,20 @@ class OllamaEmbeddingEngine(EmbeddingEngine):
                 self.endpoint, json=payload, headers=headers, timeout=60.0
             ) as response:
                 data = await response.json()
+                # Handle different embedding response formats
                 if "embeddings" in data:
+                    # Format 1: {"embeddings": [[...]]} - plural with list
                     return data["embeddings"][0]
-                else:
+                elif "embedding" in data:
+                    # Format 2: {"embedding": [...]} - singular
+                    return data["embedding"]
+                elif "data" in data and isinstance(data["data"], list) and len(data["data"]) > 0:
+                    # Format 3: {"data": [{"embedding": [...]}]} - OpenAI format
                     return data["data"][0]["embedding"]
+                else:
+                    # Handle unexpected format
+                    logger.error(f"Unexpected embedding response format: {data}")
+                    raise KeyError("Invalid embedding response format")
 
     def get_vector_size(self) -> int:
         """
